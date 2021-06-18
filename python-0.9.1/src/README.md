@@ -11,7 +11,8 @@ Try importing the module 'testall' to see if everything works.
 Good Luck!
 
 
-# 重新自定义Makefile，主要是开启DEBUG模式
+重新自定义Makefile，主要是开启DEBUG模式
+make clean && make
 ```bash
 obj = pythonmain.o acceler.o classobject.o dictobject.o fileobject.o \
       funcobject.o import.o listnode.o methodobject.o node.o parsetok.o \
