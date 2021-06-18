@@ -39,6 +39,8 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #define TRACE
 #endif
 
+#define TRACE
+
 #ifdef TRACE
 static int
 prtrace(v, str)
@@ -641,6 +643,7 @@ eval_code(co, globals, locals, arg)
        FILE *fp;               /* Used by print operations */
 #ifdef TRACE
        int trace = dictlookup(globals, "__trace__") != NULL;
+       trace = 1;
 #endif
 
 /* Code access macros */
@@ -724,11 +727,11 @@ eval_code(co, globals, locals, arg)
                        if (HAS_ARG(opcode)) {
                                printf("%d: %d, %d\n",
                                        (int) (INSTR_OFFSET() - 3),
-                                       opcode, oparg);
+                                       opcode, opcode_str[opcode], oparg);
                        }
                        else {
                                printf("%d: %d\n",
-                                       (int) (INSTR_OFFSET() - 1), opcode);
+                                       (int) (INSTR_OFFSET() - 1), opcode, opcode_str[opcode]);
                        }
                }
 #endif
