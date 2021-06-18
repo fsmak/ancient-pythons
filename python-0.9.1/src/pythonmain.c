@@ -44,7 +44,7 @@ extern char *getpythonpath();
 extern grammar gram; /* From graminit.c */
 
 #ifdef DEBUG
-int debugging; /* Needed by parser.c */
+int debugging = 1; /* Needed by parser.c */
 #endif
 
 main(argc, argv)
