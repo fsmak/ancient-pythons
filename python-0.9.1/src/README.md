@@ -34,3 +34,9 @@ $(target): $(obj)
 clean:
         rm -rf *.o python
 ```
+
+如果遇到编译出来的 python 二进制代码 gdb 加载的时候，没有找到main函数入口，可以尝试修改 pythonmain.c 的main函数定义为
+```c
+//可能是代码是旧的c语言函数定义，导致gdb无法找到入口，可以尝试改成下面的重现编译
+void main(int argc, char **argv)
+```
