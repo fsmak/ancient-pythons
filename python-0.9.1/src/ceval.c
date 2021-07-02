@@ -625,18 +625,18 @@ eval_code(co, globals, locals, arg)
        object *locals;
        object *arg;
 {
-       register unsigned char *next_instr;
-       register int opcode;    /* Current opcode */
-       register int oparg;     /* Current opcode argument, if any */
-       register object **stack_pointer;
-       register enum why_code why; /* Reason for block stack unwind */
-       register int err;       /* Error status -- nonzero if error */
-       register object *x;     /* Result object -- NULL if error */
-       register object *v;     /* Temporary objects popped off stack */
-       register object *w;
-       register object *u;
-       register object *t;
-       register frameobject *f; /* Current frame */
+        unsigned char *next_instr;
+        int opcode;    /* Current opcode */
+        int oparg;     /* Current opcode argument, if any */
+        object **stack_pointer;
+        enum why_code why; /* Reason for block stack unwind */
+        int err;       /* Error status -- nonzero if error */
+        object *x;     /* Result object -- NULL if error */
+        object *v;     /* Temporary objects popped off stack */
+        object *w;
+        object *u;
+        object *t;
+        frameobject *f; /* Current frame */
        int lineno;             /* Current line number */
        object *retval;         /* Return value iff why == WHY_RETURN */
        char *name;             /* Name used by some instructions */
@@ -715,6 +715,7 @@ eval_code(co, globals, locals, arg)
                }
 
                /* Extract opcode and argument */
+               //printf("{%d %x %d}\n", next_instr, next_instr, next_instr[0]);
 
                opcode = NEXTOP();
                if (HAS_ARG(opcode))
@@ -725,13 +726,14 @@ eval_code(co, globals, locals, arg)
 
                if (trace) {
                        if (HAS_ARG(opcode)) {
-                               printf("%d: %d, %d\n",
-                                       (int) (INSTR_OFFSET() - 3),
+                               printf("op=%02d[next=%02d]: [%d][%s], %d\n",
+                                       (int) (INSTR_OFFSET() - 3), (int)(INSTR_OFFSET()),
                                        opcode, opcode_str[opcode], oparg);
                        }
                        else {
-                               printf("%d: %d\n",
-                                       (int) (INSTR_OFFSET() - 1), opcode, opcode_str[opcode]);
+                               printf("op=%02d[next=%02d]: [%d][%s]\n",
+                                       (int) (INSTR_OFFSET() - 1), (int)(INSTR_OFFSET()),
+                                       opcode, opcode_str[opcode]);
                        }
                }
 #endif
