@@ -250,6 +250,20 @@ com_addfwref(c, op, p_anchor)
        int *p_anchor;
 {
        /* Compile a forward reference for backpatching */
+       /* p_anchor 是一个链条关系，比如 
+       try:
+         suit --> 这里执行完了要去执行 finally ，因此会有一个 JUMP_FORWARD FINALLY地址 
+       except: 
+         suit --> 这里执行完了要去执行 finally ，因此会有一个 JUMP_FORWARD FINALLY地址 
+       finally：
+         suit --> 这里执行完了要去执行 finally ，因此会有一个 JUMP_FORWARD FINALLY地址 
+       可以看到有若干个block代码执行完都需要jump到同一个地方，因此这里需要一个链条的关系把回补同一个地址的anchor偏移串起来
+       第一个回填地址初始值为0，第二个同样的回填地址则是当前here-第一个的差（即为距离第一个回填地址的偏移here - anchor），
+       如此类推，对于要回填同一个地址的回填地址初始化的值都为对上一个回填地址的偏移，这样回填的时候就可以一个个串起来，一直
+       找到第一个，如何判断为第一个？那就是初始化值为0
+       [#0 初始值=0]......[#1 初始值=距离#0的偏移]......[#2 初始值=距离#1的偏移]
+            
+       */
        int here;
        int anchor;
        com_addbyte(c, op);
@@ -269,6 +283,18 @@ com_backpatch(c, anchor)
        int lastanchor = 0;
        int dist;
        int prev;
+       /*
+       这个循环是对同一条链填充同一个回填地址，prev是上一个回填地址的初始值，
+       [#0 初始值=0]......[#1 初始值=距离#0的偏移]......[#2 初始值=距离#1的偏移]
+       比如填充#2的时候，先提取出#2记录的初始值，这个初始值就是#1的位置，有了上一个位置之后，
+       就填充#2后
+       [#0 初始值=0]......[#1 初始值=距离#0的偏移]......[#2 dist]
+       接着判断prev是否为0？如果是则代表没有上一个回填地址了，跳出循环，通常while里面没有break语句等就一次回填即可
+       假如prev不为0，则这个prev就是上一个回填偏移（#1），所以 anchor -= prev
+       这个时候，还是先提取#1的初始值到prev，然后填充#1
+       [#0 初始值=0]......[#1 dist]......[#2 dist]
+       继续判断prev是否为0？ 如此类推一直到 prev初始值为0，则是找到链头了，没有父的anchor了，退出循环
+       */
        for (;;) {
                /* Make the JUMP instruction at anchor point to target */
                prev = code[anchor] + (code[anchor+1] << 8);
@@ -1215,25 +1241,59 @@ com_while_stmt(c, n)
        struct compiling *c;
        node *n;
 {
-       int break_anchor = 0;
-       int anchor = 0;
-       int begin;
+       int break_anchor = 0; //回填地址偏移
+       int anchor = 0; //回填地址偏移
+       int begin; //suit指令偏移
        REQ(n, while_stmt); /* 'while' test ':' suite ['else' ':' suite] */
-       com_addfwref(c, SETUP_LOOP, &break_anchor);
+       /*
+       node *n0 = CHILD(n, 0); // 'while'
+       node *n1 = CHILD(n, 1); // test
+       node *n2 = CHILD(n, 2); // ':'
+       node *n3 = CHILD(n, 3); // suite
+
+       [xxx]
+       这个 SETUP_LOOP 指令是设置一个 setup_block 函数调用，对应应该是后续的 POP_BLOCK 指令 
+       [SETUP_LOOP break_anchor] 这个 break_anchor 是一个绝对值，指向的是suite第一条语句---------------->>
+       while                                                                                         |
+           test :  ----> begin                                                                       |
+         [JUMP_IF_FALSE anchor] 这个anchor 是相对值指向循环结束接跟着的清理语句，条件是test运算为FALSE    |
+         suite...                   |    <<----------------------------------------------------------<<
+         suite...                   |
+         suite...                   |
+         [JUMP_ABSOLUTE begin]      |  跳转到 test begin 重新下一轮循环                    
+       [POP_TOP] <------------------<
+       [POP_BLOCK]
+       */
+       //break_anchor对应的是SETUP_LOOP指令参数（跳转位置）的偏移，用于后面回填，这个值记录的是
+       //整个循环的范围（包含了清理语句 POP_TOP 和 POP_BLOCk
+       com_addfwref(c, SETUP_LOOP, &break_anchor); 
        begin = c->c_nexti;
        com_addoparg(c, SET_LINENO, n->n_lineno);
+       //解释test代码，解释完这部分代码后，下面的com_addfwref就可以获取suit第一条代码的位置了，
+       //用于后续回填地址
        com_node(c, CHILD(n, 1));
-       com_addfwref(c, JUMP_IF_FALSE, &anchor);
+       //当前anchor对应的是JUMP_IF_FALSE指令后面的参数位置，用于编译完整个循环后得出循环结束地址后，
+       //再回填JUMP_IF_FALSE这个参数真正的地址，这个回填工作是后面com_backpatch(c, anchor)做的事情
+       //这里要做的除了插入[JUMP_IF_FALSE 0]之外（0是暂时填上去占个坑，对于while循环，这个anchor是0），
+       //还记录了参数0对应的指令偏移，有了这个偏移后面回填
+       //就可以填上真正的 [JUMP_IF_FALSE 循环结束清理地址] 了
+       //根据JUMP_IF_FALSE指令，执行的是相对跳转，因此在执行时会用当前指令偏移+anchor实现跳转到循环
+       //结束的清理语句位置执行，具体可以看ceval.c解释执行部分代码
+       com_addfwref(c, JUMP_IF_FALSE, &anchor); 
        com_addbyte(c, POP_TOP);
        c->c_loops++;
        com_node(c, CHILD(n, 3));
        c->c_loops--;
-       com_addoparg(c, JUMP_ABSOLUTE, begin);
+       com_addoparg(c, JUMP_ABSOLUTE, begin); //跳转到test准备第二轮循环
+       //编译完所有suit指令后，可以得出当前地址了，然后再去回填anchor
        com_backpatch(c, anchor);
        com_addbyte(c, POP_TOP);
        com_addbyte(c, POP_BLOCK);
+       //如果是有 else 的则继续编译 else 对应的 suit 代码
        if (NCH(n) > 4)
                com_node(c, CHILD(n, 6));
+       //全部都编译完成了，那么就可以得出整个循环的结束位置范围（包括清理代码 POP_TOP POP_BLOCK），可以回填了
+       //跟anchor的原理一样，这个break_anchor也是 SETUP_LOOP 指令参数的一个位置，
        com_backpatch(c, break_anchor);
 }
 
@@ -1363,6 +1423,15 @@ com_try_stmt(c, n)
        int except_anchor = 0;
        REQ(n, try_stmt);
        /* 'try' ':' suite (except_clause ':' suite)* ['finally' ':' suite] */
+       /*
+       node *n0 = CHILD(n, 0); // 'try'
+       node *n1 = CHILD(n, 1); // ':'
+       node *n2 = CHILD(n, 2); // suite
+       node *n3 = CHILD(n, 3); // except_clause
+       node *n4 = CHILD(n, 4); // ':'
+       node *n5 = CHILD(n, 5); // suite
+       ......
+       */
 
        if (NCH(n) > 3 && TYPE(CHILD(n, NCH(n)-3)) != except_clause) {
                /* Have a 'finally' clause */
@@ -1767,6 +1836,20 @@ compile(n, filename)
                co = newcodeobject(sc.c_code, sc.c_consts, sc.c_names, filename);
        else
                co = NULL;
+        /**/
+       for( int i = 0; i < sc.c_nexti; i++ ) {
+               int byte = getstringvalue(sc.c_code)[i];
+               char *szbyte = opcode_str[byte];
+               if( HAS_ARG(byte) ) {
+                       int arg = getstringvalue(sc.c_code)[i+1];
+                       printf("%02d: [%d][%s][%d]\n", i, byte, szbyte, arg);
+                       i+=2;
+               } else {
+                       printf("%02d: [%d][%s]\n", i, byte, szbyte);
+               }
+       }
+
        com_free(&sc);
        return co;
 }
+
