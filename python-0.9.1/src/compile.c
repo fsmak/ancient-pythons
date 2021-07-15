@@ -1122,6 +1122,15 @@ com_expr_stmt(c, n)
        node *n;
 {
        REQ(n, expr_stmt); /* exprlist ('=' exprlist)* NEWLINE */
+       /*
+       // x = 1 为例
+       node *n0 = CHILD(n, 0);// exprlist (a)
+       node *n1 = CHILD(n, 1);// '='
+       node *n2 = CHILD(n, 2);// exprlist (1)
+       node *n3 = CHILD(n, 3);// NEWLINE
+       */
+       //先编译 = 后面的 exrlist，然后把值push到栈，
+       //这里最终会产生一个 LOAD_CONST 0 的指令，把初始化值0 push入栈
        com_node(c, CHILD(n, NCH(n)-2));
        if (NCH(n) == 2) {
                com_addbyte(c, PRINT_EXPR);
@@ -1129,8 +1138,13 @@ com_expr_stmt(c, n)
        else {
                int i;
                for (i = 0; i < NCH(n)-3; i+=2) {
-                       if (i+2 < NCH(n)-3)
+                       if (i+2 < NCH(n)-3) {
+                               // x=y=1 的情况，DUP_TOP 是两个TOP，复制一份
                                com_addbyte(c, DUP_TOP);
+                       }
+                       //再编译 = 前面的 exprlist，这个时候栈里面已经有了 = 后面exrlist的值了，
+                       //再赋予给 = 前面的 exrlist
+                       //这里最终会产生一个 STORE_NAME a 的指令，把已经入栈的 0 赋值到 a 变量
                        com_assign(c, CHILD(n, i), 1/*assign*/);
                }
        }
@@ -1347,6 +1361,8 @@ com_for_stmt(c, n)
    meaning that the 'finally' clause is entered even if things
    go wrong again in an exception handler.  Note that this is
    not the case for exception handlers: at most one is entered.
+   
+   上面这段话大概讲述了，finally是独立自己一个block的，防止在except的block里面又发生错误异常。
 
    Code generated for "try: S finally: Sf" is as follows:
 
@@ -1362,17 +1378,34 @@ com_for_stmt(c, n)
    SETUP_FINALLY), the level of the value stack at the time the
    block stack entry was created, and a label (here L).
 
+   上面这段话大概介绍了block的标记情况，比如对finally有一个专门的SETUP_FINALLY指令，
+   这个指令会记录当前stack信息，这个L就是finally block的偏移位置，用于跳转到finally
+   执行代码的。每一个block都记录两个重要的关键信息，一个是stack用于恢复清理block里面
+   代码产生的临时元素；一个是handler用于指定block完结后应该跳转到那里去继续执行，比如
+   try的block完了会去执行finally的代码。
+
    SETUP_FINALLY:
        Pushes the current value stack level and the label
        onto the block stack.
+       这个指令是把当前stack指针偏移和对应finally的位置保存到block数据结构然后push到
+       frame的block stack。
    POP_BLOCK:
        Pops en entry from the block stack, and pops the value
        stack until its level is the same as indicated on the
        block stack.  (The label is ignored.)
+       这个指令是从frame的blockstack取一个block元素出来，把当前stack恢复成block元素
+       记录的stack状态，就是清理stack在上一个代码块block所产生的临时变量数据
    END_FINALLY:
        Pops a variable number of entries from the *value* stack
        and re-raises the exception they specify.  The number of
        entries popped depends on the (pseudo) exception type.
+       END_FINALLY有点难以理解，看编译代码，只要有except就会有一个END_FINALLY，有finally
+       也有一个END_FINALLY，所以如果代码里面有except和finally那就会生成两个END_FINALLY，
+       至于END_FINALLY的作用看注释意思是说清理stack元素然后再重新抛出一个异常。经过实战调试
+       后确认，假如except E1，except E2，等等，只要有异常类型匹配了，END_FINALLY 里面 v=pop()
+       v是NoneObject，但是假如没有一个异常类型匹配那么END_FINALLY的作用就是重新抛出一个异常
+       re-raises让外面的去捕获去处理，所以个人理解END_FINALLY的作用就是看所有except语句结束后
+       看看stack里面是否有未能识别处理的异常，有的话就重新抛到外面去处理。
 
    The block stack is unwound when an exception is raised:
    when a SETUP_FINALLY entry is found, the exception is pushed
@@ -1385,24 +1418,36 @@ com_for_stmt(c, n)
    at the right; 'tb' is trace-back info, 'val' the exception's
    associated value, and 'exc' the exception.)
 
+   下面以
+   try:
+     S
+   except E1, V1:
+     S1
+   except E2, V2:
+     S2
+   为例子，记录stack情况，其中 ：
+   tb 为trace-back info；
+   val 为except关联数据；
+   exc 为except信息
+
    Value stack         Label   Instruction     Argument
-   []                          SETUP_EXCEPT    L1
+   []                          SETUP_EXCEPT    L1                              #SETUP_EXCEPT指令会记录当前stack及L1（L1为except入口偏移）信息到frame的block stack
    []                          <code for S>
    []                          POP_BLOCK
-   []                          JUMP_FORWARD    L0
+   []                          JUMP_FORWARD    L0                              #正常执行完毕直接跳转到L0继续执行其他语句
 
-   [tb, val, exc]      L1:     DUP                             )
+   [tb, val, exc]      L1:     DUP                             )               #except E1，V1的逻辑及stack情况
    [tb, val, exc, exc]         <evaluate E1>                     )
-   [tb, val, exc, exc, E1]     COMPARE_OP      EXC_MATCH       ) only if E1
-   [tb, val, exc, 1-or-0]      JUMP_IF_FALSE   L2              )
-   [tb, val, exc, 1]           POP                             )
+   [tb, val, exc, exc, E1]     COMPARE_OP      EXC_MATCH       ) only if E1    #判断是否是E1异常
+   [tb, val, exc, 1-or-0]      JUMP_IF_FALSE   L2              )               #如果不是E1异常则去L2，判断是否为E2异常
+   [tb, val, exc, 1]           POP                             )               #E1异常逻辑
    [tb, val, exc]              POP
    [tb, val]                   <assign to V1>    (or POP if no V1)
    [tb]                                POP
    []                          <code for S1>
-                               JUMP_FORWARD    L0
+                               JUMP_FORWARD    L0                              #执行完E1异常逻辑跳去L0
 
-   [tb, val, exc, 0]   L2:     POP
+   [tb, val, exc, 0]   L2:     POP                                             #E2异常处理逻辑
    [tb, val, exc]              DUP
    .............................etc.......................
 
@@ -1419,8 +1464,12 @@ com_try_stmt(c, n)
        struct compiling *c;
        node *n;
 {
-       int finally_anchor = 0;
-       int except_anchor = 0;
+       // finally回填地址偏移
+       // 这个回填地址就是finally入口地址，这个要把try except 这部分语句都生成完才知道finally的地址才回填
+       // 对finally来讲，只有一个回填节点
+       int finally_anchor = 0; 
+       // except回填地址链节点头，默认值为0，当前值为链头，链头初值为0，每增加一个回填节点记录的是距离上一个节点的偏移
+       int except_anchor = 0;  
        REQ(n, try_stmt);
        /* 'try' ':' suite (except_clause ':' suite)* ['finally' ':' suite] */
        /*
@@ -1430,24 +1479,36 @@ com_try_stmt(c, n)
        node *n3 = CHILD(n, 3); // except_clause
        node *n4 = CHILD(n, 4); // ':'
        node *n5 = CHILD(n, 5); // suite
-       ......
+       node *n6 = CHILD(n, 6); // finally
+       node *n7 = CHILD(n, 7); // ':'
+       node *n8 = CHILD(n, 8); // suite
        */
-
        if (NCH(n) > 3 && TYPE(CHILD(n, NCH(n)-3)) != except_clause) {
                /* Have a 'finally' clause */
+               //有finally的先生成 SETUP_FINALLY 指令及设置第一个finally的回填链头
+               //这里会调用setup_block, push一个block到frame
                com_addfwref(c, SETUP_FINALLY, &finally_anchor);
        }
        if (NCH(n) > 3 && TYPE(CHILD(n, 3)) == except_clause) {
                /* Have an 'except' clause */
+               //有except的先生成 SETUP_EXCEPT 指令及设置第一个except的回填链头
+               //这里会调用setup_block, push一个block到frame
                com_addfwref(c, SETUP_EXCEPT, &except_anchor);
        }
+       //编译 try 包含的语句
        com_node(c, CHILD(n, 2));
        if (except_anchor) {
+               //如果有 except 语句，那么需要对 except 进行编译
+               
+               //这个end_anchor对应的是except结束位置
                int end_anchor = 0;
                int i;
                node *ch;
-               com_addbyte(c, POP_BLOCK);
-               com_addfwref(c, JUMP_FORWARD, &end_anchor);
+               //通常代码执行到这里就是没有产生异常了，如果产生异常会直接跳到except位置except_anchor
+               com_addbyte(c, POP_BLOCK); //这行代码是提取出SETUP_EXCEPT时保存的stack信息恢复
+               com_addfwref(c, JUMP_FORWARD, &end_anchor); //跳转到except结束位置
+               //上面这两条语句是没有异常时执行的，恢复stack然后跳转到except后面的语句继续执行
+               //这里才是except的入口，有异常发生时会从这里开始执行，也就是回填except_anchor地址
                com_backpatch(c, except_anchor);
                for (i = 3;
                        i < NCH(n) && TYPE(ch = CHILD(n, i)) == except_clause;
@@ -1481,13 +1542,18 @@ com_try_stmt(c, n)
                                com_addbyte(c, POP_TOP);
                        }
                }
+               //加入 END_FINALLY 指令跟进是否还有未处理或者未识别的 异常，具体看指令执行逻辑
                com_addbyte(c, END_FINALLY);
+               //编译完except了，回填 except 结束地址 end_anchor 了
                com_backpatch(c, end_anchor);
        }
        if (finally_anchor) {
+               //假如有 finally 则解释 finally 部分
                node *ch;
+               //POP_BLOCK清理stack临时生成的元素
                com_addbyte(c, POP_BLOCK);
                com_addoparg(c, LOAD_CONST, com_addconst(c, None));
+               //回填finally入口地址
                com_backpatch(c, finally_anchor);
                ch = CHILD(n, NCH(n)-1);
                com_addoparg(c, SET_LINENO, ch->n_lineno);
