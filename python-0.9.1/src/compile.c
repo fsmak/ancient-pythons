@@ -1429,6 +1429,7 @@ com_for_stmt(c, n)
    tb 为trace-back info；
    val 为except关联数据；
    exc 为except信息
+   下面这个图非常关键，可以理解stack元素push、pop情况，也知道为什么代码有POP的操作
 
    Value stack         Label   Instruction     Argument
    []                          SETUP_EXCEPT    L1                              #SETUP_EXCEPT指令会记录当前stack及L1（L1为except入口偏移）信息到frame的block stack
@@ -1500,7 +1501,9 @@ com_try_stmt(c, n)
        if (except_anchor) {
                //如果有 except 语句，那么需要对 except 进行编译
                
-               //这个end_anchor对应的是except结束位置
+               //这个end_anchor对应的是except结束位置，注意跟 except_anchor区分好
+               //except_anchor是单个except的结束位置，而end_anchor是最后一个except
+               //的结束位置
                int end_anchor = 0;
                int i;
                node *ch;
@@ -1513,6 +1516,7 @@ com_try_stmt(c, n)
                for (i = 3;
                        i < NCH(n) && TYPE(ch = CHILD(n, i)) == except_clause;
                                                                i += 3) {
+                       //这个循环是针对有多个except的，如果只有一个except就轮一次
                        /* except_clause: 'except' [expr [',' expr]] */
                        if (except_anchor == 0) {
                                err_setstr(TypeError,
@@ -1520,22 +1524,46 @@ com_try_stmt(c, n)
                                c->c_errors++;
                                break;
                        }
+                       //except_anchor这个是这次except的结束位置也就是下一个except的入口
+                       //注意跟上面end_anchor的区别，那个是最后一个except也就是所有except
+                       //解释完后的结束位置，所以每次循环都要重新把except_anchor置零，因为
+                       //他没有链条关系，单独的一个except而已
                        except_anchor = 0;
                        com_addoparg(c, SET_LINENO, ch->n_lineno);
                        if (NCH(ch) > 1) {
+                               //这里是编译有匹配异常类型的逻辑，这里有个DUP_TOP的操作，这个操作就是把当前stack
+                               //top的元素复制一份，就是把异常信息元素复制一份，用来下面做EXC_MATCH异常匹配比较
+                               //因为这个操作会pop一个异常作为参数，所以这里DUP_TOP一份就是这个意思，防止匹配不
+                               //符合后还继续保留一个异常信息元素留待下一个匹配或者抛出外面处理
                                com_addbyte(c, DUP_TOP);
                                com_node(c, CHILD(ch, 1));
+                               //比较是否匹配异常类型
                                com_addoparg(c, COMPARE_OP, EXC_MATCH);
+                               //如果不匹配，那么就跳转到下一个except异常判断逻辑，这里需要注意except_anchor是每个
+                               //循环都会重置为0，因为有多个except的话，每个except入口都是不一样的，所以这个for循环
+                               //处理每个except都不同。
+                               //类型匹配只能而且也只会有一次TRUE的情况，所以不匹配的就继续判断下一个except
                                com_addfwref(c, JUMP_IF_FALSE, &except_anchor);
+                               //假如异常匹配了没有跳转就会来到这里，我们需要把TOP POP掉，因为COMPARE_OP会把比较结果
+                               //PUSH到stack，所以这里需要POP掉COMPARE_OP的结果
                                com_addbyte(c, POP_TOP);
                        }
+                       /*
+                       下面是编译except逻辑，对于有多个except（就是有指定匹配类型的）或者一个except都会生成对应的
+                       代码，但是真正执行的时候只会执行一个一次，对于多个except只会有一次匹配，对于没有指定类型的那么
+                       也只有一个except，所以下面的代码虽然循环生成一个或者多个except逻辑，但是实际上只会执行一次，
+                       上面JUMP_IF_FALSE也有解释，所以我们要带着执行时的逻辑去看代码，而不仅仅是编译的逻辑去看代码
+                       */
+                       //这个POP是POP掉异常元素[exc]，来到这里已经是可以处理异常了，具体可以看上面官方自带的注释stack元素情况
                        com_addbyte(c, POP_TOP);
                        if (NCH(ch) > 3)
-                               com_assign(c, CHILD(ch, 3), 1/*assigning*/);
+                               com_assign(c, CHILD(ch, 3), 1/*assigning*/);//有赋值异常信息的需要再解释
                        else
-                               com_addbyte(c, POP_TOP);
+                               com_addbyte(c, POP_TOP);//这里根据注释是pop掉[val]元素，因为代码没有对异常信息赋值，所以也没用了可以清理
                        com_addbyte(c, POP_TOP);
+                       //编译except具体逻辑
                        com_node(c, CHILD(n, i+2));
+                       //except完了就跳转到except的结束位置
                        com_addfwref(c, JUMP_FORWARD, &end_anchor);
                        if (except_anchor) {
                                com_backpatch(c, except_anchor);
