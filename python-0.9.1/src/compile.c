@@ -583,9 +583,11 @@ com_call_function(c, n)
        node *n; /* EITHER testlist OR ')' */
 {
        if (TYPE(n) == RPAR) {
+               //无参数调用
                com_addbyte(c, UNARY_CALL);
        }
        else {
+               //有参数调用
                com_node(c, n);
                com_addbyte(c, BINARY_CALL);
        }
@@ -1560,6 +1562,7 @@ com_try_stmt(c, n)
                                com_assign(c, CHILD(ch, 3), 1/*assigning*/);//有赋值异常信息的需要再解释
                        else
                                com_addbyte(c, POP_TOP);//这里根据注释是pop掉[val]元素，因为代码没有对异常信息赋值，所以也没用了可以清理
+                       //根据官方注释，这里是pop掉[tb] trace-backinfo 元素
                        com_addbyte(c, POP_TOP);
                        //编译except具体逻辑
                        com_node(c, CHILD(n, i+2));
@@ -1624,6 +1627,9 @@ com_funcdef(c, n)
                int i = com_addconst(c, v);
                com_addoparg(c, LOAD_CONST, i);
                com_addbyte(c, BUILD_FUNCTION);
+               //每一个函数编译=》构造完后，都会用 STORE_NAME 指令保存在 frame 的 f_locals 里面
+               //这个信息很关键，因为后续比如编译类成员函数的时候，需要获取这个类的所有函数构造成
+               //一个字典，具体看类编译部分
                com_addopname(c, STORE_NAME, CHILD(n, 1));
                DECREF(v);
        }
@@ -1657,19 +1663,37 @@ com_classdef(c, n)
        baselist: atom arguments (',' atom arguments)*
        arguments: '(' [testlist] ')'
        */
-       if (NCH(n) == 7)
-               com_bases(c, CHILD(n, 4));
-       else
-               com_addoparg(c, LOAD_CONST, com_addconst(c, None));
+       if (NCH(n) == 7) {
+           //有父类，则调用com_bases编译
+           com_bases(c, CHILD(n, 4));
+       } else {
+           //没有父类则弄个None，push一个Node到stack
+           com_addoparg(c, LOAD_CONST, com_addconst(c, None));
+       }
+       //编译类，这里的类有可能是单独一个文件的，返回的是类编译代码 *v
+       //类和函数一样，是单独 compile 编译一个 *v 实例的
        v = (object *)compile(n, c->c_filename);
        if (v == NULL)
                c->c_errors++;
        else {
+               //把类编译代码添加到const，并获取对应索引 i
                int i = com_addconst(c, v);
+               //生成一个const加载到stack指令，具体看LOAD_CONST指令运行机制，这里就是push类编译代码到stack
                com_addoparg(c, LOAD_CONST, i);
+               //生成一个BUILD_FUNCTION代码，这个BUILD_FUNCTION是为了执行类里面的函数构造指令而设定的
+               //python里面编译函数指令是一部分，但是在运行时还需要专门的构造指令BUILD_FUNCTION去为函数创建分配对应的数据结构
+               //因此，类里面的函数是编译好了，但是还需要去运行对应 *v 里面的BUILD_FUNCTION指令（多少个函数里面就有多少个指令，这里说的是 *v里面，而不是下面那个）
+               //所以，一个类编译好了之后，就要生成一个BUILD_FUNCTION去运行 *v 类里面的BUILD_FUNCTION指令进行成员函数的构造
                com_addbyte(c, BUILD_FUNCTION);
+               //上面生成了BUILD_FUNCTION指令了，接下来就需要调用，这里是无参数调用因此就生成一个UNARY_CALL，这个指令就会去触发 *v 里面的成员
+               //函数进行逐个构造BUILD_FUNCTION
                com_addbyte(c, UNARY_CALL);
+               //生成一个类构造指令BUILD_CLASS，这里会跟距 父类和类 的编译代码来构造一个类信息 newclassobject 对象push回stack
+               //父类base信息比较好获取，上面已经有com_base了，那么类里面的函数信息如何获取？需要看 compile_node函数里面 case classdef 逻辑
+               //成员里面函数编译完后保存在locals，然后作为返回值push到stack，因此 BUILD_CLASS 指令执行的时候，可以pop stack来获取函数列表信息
+               //具体看BUILD_CLASS的执行逻辑
                com_addbyte(c, BUILD_CLASS);
+               //生成一个STORE_NAME指令，把类代码信息保存到 frame 的 local 变量字典
                com_addopname(c, STORE_NAME, CHILD(n, 1));
                DECREF(v);
        }
@@ -1904,6 +1928,9 @@ compile_node(c, n)
                /* 'class' NAME parameters ['=' baselist] ':' suite */
                com_addbyte(c, REFUSE_ARGS);
                com_node(c, CHILD(n, NCH(n)-1));
+               //先看com_funcdef函数说明，每一个函数编译完都会借助STORE_NAME指令把函数信息保存到 frame 的 locals
+               //当一个类里面的函数编译完之后，locals里面就记录了所有类里面的函数信息了，这里需要作为参数返回到外面
+               //因为外层的com_classdef函数需要做构造类的指令，其中需要类里面的函数信息
                com_addbyte(c, LOAD_LOCALS);
                com_addbyte(c, RETURN_VALUE);
                break;
@@ -1931,6 +1958,7 @@ compile(n, filename)
        else
                co = NULL;
         /**/
+       printf("==================%d %s===================\n", n->n_type, filename);
        for( int i = 0; i < sc.c_nexti; i++ ) {
                int byte = getstringvalue(sc.c_code)[i];
                char *szbyte = opcode_str[byte];
