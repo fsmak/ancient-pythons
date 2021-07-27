@@ -39,6 +39,7 @@ newclassobject(bases, methods)
        object *bases; /* NULL or tuple of classobjects! */
        object *methods;
 {
+       //记录父类、成员函数信息
        classobject *op;
        op = NEWOBJ(classobject, &Classtype);
        if (op == NULL)
