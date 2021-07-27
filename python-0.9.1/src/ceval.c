@@ -1086,8 +1086,10 @@ eval_code(co, globals, locals, arg)
                        break;
 
                case BUILD_CLASS:
-                       w = POP();
-                       v = POP();
+                       //跟进之前编译代码逻辑分析可以知道，stack里面已经保存了父类和成员函数信息了
+                       w = POP();// 类函数信息
+                       v = POP();// 类父类信息
+                       //根据 w、v 信息去构造类信息
                        x = build_class(v, w);
                        PUSH(x);
                        DECREF(v);
