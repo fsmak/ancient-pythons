@@ -1230,25 +1230,53 @@ com_if_stmt(c, n)
        struct compiling *c;
        node *n;
 {
+       /*
+       对于for、while、try-catch-finally等语句块都有对应的 setup block，但是为什么 if 没有呢？
+       在if-elif-else的suite里面，创建的临时变量不需要清理掉吗？写了以下一段python测试代码
+       ```
+         if 1:
+           a = 1
+         print a
+       ```
+       程序可以运行起来，外面的print a输出1，跟程序的逻辑一致，因为对于if语句来讲，语句里面创建的
+       不是临时变量，而是在当前frame的变量，就算离开if语句了一样生效，不知道为什么python要这样设计
+       */
        int i;
+       //anchor记录的是所有if语句里面所有会跳转到整个if语句结束位置的回填地址链
        int anchor = 0;
        REQ(n, if_stmt);
        /*'if' test ':' suite ('elif' test ':' suite)* ['else' ':' suite] */
        for (i = 0; i+3 < NCH(n); i+=4) {
+               /*
+               这个循环每次分析的是4个节点，刚好对应 if test ':' suite ，所以这个循环
+               就是编译 if elif 的
+               */
+               // a 记录的是当前 if/elif 块的结束位置，就是说这个 if/elif 不满足了就跳去接着的下一个 elif
+               // 所有每次循环 a = 0；
                int a = 0;
                node *ch = CHILD(n, i+1);
-               if (i > 0)
+               if (i > 0) {
                        com_addoparg(c, SET_LINENO, ch->n_lineno);
+               }
+               // 编译 test
                com_node(c, CHILD(n, i+1));
+               // 插入回填地址，如果 test 语句条件不满足则跳转到下一个 elif
                com_addfwref(c, JUMP_IF_FALSE, &a);
+               // 清理 test 判断的值，结果放stack了，来到这里就是条件满足了，把结果 pop 掉
                com_addbyte(c, POP_TOP);
+               // 解析 suite
                com_node(c, CHILD(n, i+3));
+               // 插入 整个 if 语句的结束回填地址，因为既然这个 if/elif 处理完了就可以直接结束了
                com_addfwref(c, JUMP_FORWARD, &anchor);
+               // 回填 当前 if/elif 语句块的地址，其实也就是下一个 elif或者else的地址
                com_backpatch(c, a);
                com_addbyte(c, POP_TOP);
        }
-       if (i+2 < NCH(n))
+       if (i+2 < NCH(n)) {
+               //这个是编译有 else 语句的
                com_node(c, CHILD(n, i+2));
+       }
+       // 回填整个 if 语句的结束地址，回填所有 anchor 链节点
        com_backpatch(c, anchor);
 }
 
@@ -1301,13 +1329,14 @@ com_while_stmt(c, n)
        com_node(c, CHILD(n, 3));
        c->c_loops--;
        com_addoparg(c, JUMP_ABSOLUTE, begin); //跳转到test准备第二轮循环
-       //编译完所有suit指令后，可以得出当前地址了，然后再去回填anchor
+       //编译完所有suite指令后，可以得出当前地址了，然后再去回填anchor
        com_backpatch(c, anchor);
        com_addbyte(c, POP_TOP);
        com_addbyte(c, POP_BLOCK);
        //如果是有 else 的则继续编译 else 对应的 suit 代码
-       if (NCH(n) > 4)
+       if (NCH(n) > 4) {
                com_node(c, CHILD(n, 6));
+       }
        //全部都编译完成了，那么就可以得出整个循环的结束位置范围（包括清理代码 POP_TOP POP_BLOCK），可以回填了
        //跟anchor的原理一样，这个break_anchor也是 SETUP_LOOP 指令参数的一个位置，
        com_backpatch(c, break_anchor);
@@ -1618,14 +1647,23 @@ com_funcdef(c, n)
        struct compiling *c;
        node *n;
 {
+       /*
+       这里可能会有疑问，按照正常理解，进入函数有保存stack的逻辑，类似steup block这样的操作，在函数离开退出的时候
+       恢复stack信息，跟以前c、c++生成的汇编语言 push all 和 pop all 差不多，但是为什么python没有呢，不像while、for、try...except...finalyy
+       那样弄个setup block，是因为在python编译机制里面，针对类、函数都会单独调用 compile 函数，生成一个独立的 *v 结构，BUILD_FUNCTION 和 
+       BUILD_CLASS 会生成对应的独立实例保存 locals 等，所以就不需要额外的stack保存恢复了
+       */
        object *v;
        REQ(n, funcdef); /* funcdef: 'def' NAME parameters ':' suite */
        v = (object *)compile(n, c->c_filename);
        if (v == NULL)
                c->c_errors++;
        else {
+               // *v是编译好的函数指令代码，把他保存到const
                int i = com_addconst(c, v);
+               // 生成一个 LOAD_CONST 指令加载 const 数据到 push stack，作为下面的 BUILD 指令参数
                com_addoparg(c, LOAD_CONST, i);
+               // 生成 BUILD 构造指令，参数上面已经push 到 stack了
                com_addbyte(c, BUILD_FUNCTION);
                //每一个函数编译=》构造完后，都会用 STORE_NAME 指令保存在 frame 的 f_locals 里面
                //这个信息很关键，因为后续比如编译类成员函数的时候，需要获取这个类的所有函数构造成
