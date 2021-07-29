@@ -1356,31 +1356,55 @@ com_for_stmt(c, n)
        struct compiling *c;
        node *n;
 {
+       /*
+       首先熟悉一下python for-else 语法，其中else是可选的，for-else中else的语法逻辑是
+       如果for循环是正常结束而非break语句的，那么else的suite则执行，如果是break跳出的
+       则不执行
+       */
        object *v;
+       //break_anchor是整个for-else结束位置，当有break语句执行时要得知整个for-else的结束位置
        int break_anchor = 0;
+       //anchor对应的仅仅是for的结束位置，不包含else
        int anchor = 0;
+       //begin记录的是循环开始位置，用于下面一次循环结束后再下一次循环 JUMP_ABSOLUTE begin
        int begin;
        REQ(n, for_stmt);
        /* 'for' exprlist 'in' exprlist ':' suite ['else' ':' suite] */
+       // SETUP_LOOP 这里不在重复，参考while
        com_addfwref(c, SETUP_LOOP, &break_anchor);
+       // 编译 exprlist 计算出值
        com_node(c, CHILD(n, 3));
        v = newintobject(0L);
        if (v == NULL)
                c->c_errors++;
+       //这里LOAD_CONST一个0L的值push入stack，是作为循环index索引
+       //具体去看FOR_LOOP执行代码，有一个w = POP(); /* Loop index */的操作
+       //每循环一次w都会加1然后再push入stack下次用，因此这里预算初始化一个0L
+       //push入stack先，这样第一轮循环pop出来的index=w=0
        com_addoparg(c, LOAD_CONST, com_addconst(c, v));
        XDECREF(v);
+       //记录循环开始位置
        begin = c->c_nexti;
        com_addoparg(c, SET_LINENO, n->n_lineno);
+       //这里把anchor作为指令FOR_LOOP参数，因为在LOOP指令执行时如果发现循环结束会
+       //有一个JUMPBY(oparg)的跳转结束整个for循环
        com_addfwref(c, FOR_LOOP, &anchor);
+       //编译exprlist复制迭代变量部分
        com_assign(c, CHILD(n, 1), 1/*assigning*/);
        c->c_loops++;
+       //编译for里面的suite
        com_node(c, CHILD(n, 5));
        c->c_loops--;
+       //跳转到循环开始位置
        com_addoparg(c, JUMP_ABSOLUTE, begin);
+       //for部分编译完了，回填地址
        com_backpatch(c, anchor);
        com_addbyte(c, POP_BLOCK);
-       if (NCH(n) > 8)
+       if (NCH(n) > 8) {
+               //编译else部分代码
                com_node(c, CHILD(n, 8));
+       }
+       //for-else全部编译完了，回填地址
        com_backpatch(c, break_anchor);
 }
 
