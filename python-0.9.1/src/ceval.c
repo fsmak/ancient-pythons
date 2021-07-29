@@ -1276,23 +1276,33 @@ eval_code(co, globals, locals, arg)
                                s, i are popped, and we jump */
                        w = POP(); /* Loop index */
                        v = POP(); /* Sequence object */
+                       //u是迭代器提取的元素，不断循环就不断提取
+                       //具体不同的object有自己实现的迭代接口，看loop_subscript里面调用对象的sq_item接口方法
                        u = loop_subscript(v, w);
                        if (u != NULL) {
+                               //如果u不为空则循环未结束
                                PUSH(v);
+                               //w是index索引，循环一次后索引+1，然后push入stack，给下一次循环用
+                               //之前index已经在编译的时候push了一个0L的值进去了
                                x = newintobject(getintvalue(w)+1);
                                PUSH(x);
                                DECREF(w);
+                               //把元素u push入stack，留待外面的assigning去赋值
                                PUSH(u);
                        }
                        else {
+                               //循环结束
                                DECREF(v);
                                DECREF(w);
                                /* A NULL can mean "s exhausted"
                                   but also an error: */
-                               if (err_occurred())
+                               if (err_occurred()) {
                                        why = WHY_EXCEPTION;
-                               else
+                               }
+                               else {
+                                       //正常结束跳转到结束位置，具体看编译是SETUP_LOOP传入的anchor参数
                                        JUMPBY(oparg);
+                               }
                        }
                        break;
 
