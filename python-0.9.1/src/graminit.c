@@ -382,33 +382,59 @@ static state states_19[2] = {
        {1, arcs_19_1},
 };
 static arc arcs_20_0[1] = {
-       {49, 1},
+       {
+              49, // Label of this arc 记录所对应 labels 数组的下标， 49对应的是 if
+              1   // State where this arc goes to 理解应该是指向下一个状态，对应的是应该看 states_20 第2个， arcs_20_1 对应的是 test
+       },
 };
 static arc arcs_20_1[1] = {
-       {31, 2},
+       // if 语法是 if test
+       // 所以这个状态就是 test
+       {31, 2},  // labels对应下标#31的是 {282, 0}，这个 282 对应的是type， #define test 282， 下一个状态是 arcs_20_2
 };
 static arc arcs_20_2[1] = {
-       {15, 3},
+       // 'if' test ':'
+       // 所以这个状态就是 ':'， 下一个状态是 arcs_20_3
+       {15, 3},  // lables对应下标#15的是 {11, 0}, 这个 11对应的是type， #define COLON 11 冒号':'
 };
 static arc arcs_20_3[1] = {
-       {16, 4},
+       // 'if' test ':' suite
+       // 所以这个状态对应的是 suite， 下一个状态是 arcs_20_4
+       {16, 4},  // lables对应下标#16的是 {281, 0}, 这个 281对应的是type， #define suite 281
 };
 static arc arcs_20_4[3] = {
-       {50, 1},
-       {51, 5},
-       {0, 4},
+       // 对于 if 语句 elif、else 是可选的
+       {50, 1},  // lables对应下标#50的是 {1, "elif"},  如果是 elif 下一个状态是 arcs_20_1 继续 test
+       {51, 5},  // lables对应下标#50的是 {1, "else"},  如果是 else 下一个状态是 arcs_20_5 冒号 ':'
+       {0, 4},   // lables对应下标#0的是  {0, "EMPTY"},
 };
 static arc arcs_20_5[1] = {
-       {15, 6},
+       {15, 6},  // lables对应下标#15的是 {11, 0}, 这个 11对应的是type， #define COLON 11 冒号':'
 };
 static arc arcs_20_6[1] = {
-       {16, 7},
+       {16, 7},  // lables对应下标#16的是 {281, 0}, 这个 281对应的是type， #define suite 281
 };
 static arc arcs_20_7[1] = {
-       {0, 7},
+       {0, 7},  // 结束 {0, "EMPTY"},
 };
+/*
+以 if 语句的状态机为例子
+{
+  276, // Non-terminal this represents 
+  "if_stmt", // For printing
+  0, // Initial state
+  8, // d_nstates 标记下面 DFA 状态数组 个数的数量
+  states_20, // Array of states DFA 状态数组（8个元素）
+  "\000\000\000\000\000\000\002\000\000\000\000\000" //
+},  
+// 语法
+// 'if' test ':' suite ('elif' test ':' suite)* ['else' ':' suite] 
+*/
 static state states_20[8] = {
-       {1, arcs_20_0},
+       {
+              1,         // int s_narcs 标记下面的 s_acr 数组有多少个元素
+              arcs_20_0  // arc *s_acr  acr数组，定义在上面
+       },
        {1, arcs_20_1},
        {1, arcs_20_2},
        {1, arcs_20_3},
@@ -948,8 +974,14 @@ static dfa dfas[42] = {
         "\000\000\000\000\000\006\000\000\000\000\000\000"},
        {275, "compound_stmt", 0, 2, states_19,
         "\000\020\000\000\000\000\262\000\000\000\000\001"},
-       {276, "if_stmt", 0, 8, states_20,
-        "\000\000\000\000\000\000\002\000\000\000\000\000"},
+       {
+              276, 
+              "if_stmt", 
+              0, 
+              8, 
+              states_20,
+              "\000\000\000\000\000\000\002\000\000\000\000\000"
+        },
        {277, "while_stmt", 0, 8, states_21,
         "\000\000\000\000\000\000\020\000\000\000\000\000"},
        {278, "for_stmt", 0, 10, states_22,
@@ -994,7 +1026,7 @@ static dfa dfas[42] = {
         "\000\000\002\000\000\000\000\000\000\000\000\000"},
 };
 static label labels[91] = {
-       {0, "EMPTY"},
+       {0, "EMPTY"},  // 下标 #0
        {256, 0},
        {4, 0},
        {265, 0},
@@ -1025,7 +1057,7 @@ static label labels[91] = {
        {293, 0},
        {22, 0},
        {1, "print"},
-       {282, 0},
+       {282, 0},      // 下标#31 #define test 282 对应的是 test，没有可显示的字符串
        {1, "del"},
        {1, "pass"},
        {271, 0},
@@ -1043,6 +1075,10 @@ static label labels[91] = {
        {278, 0},
        {279, 0},
        {295, 0},
+       /* 以 if 语句为例
+       int     lb_type; 类型
+       char    *lb_str; 字符串 if
+       */
        {1, "if"},
        {1, "elif"},
        {1, "else"},
