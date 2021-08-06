@@ -45,6 +45,7 @@ typedef struct _labellist {
 /* An arc from one state to another */
 
 typedef struct _arc {
+       //记录了 labels 数组索引，下标从0开始
        short           a_lbl;          /* Label of this arc */
        short           a_arrow;        /* State where this arc goes to */
 } arc;
