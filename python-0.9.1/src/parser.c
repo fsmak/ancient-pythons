@@ -121,6 +121,14 @@ newparser(g, start)
                return NULL;
        }
        s_reset(&ps->p_stack);
+       /*
+       初始化stack，首先push进去的是指定 start 的 DFA
+       #define file_input 257  start=257 代表的是以执行文件的方式运行起python
+       #define single_input 256  start=256 代表的是以交换方式也就是直接运行python命令行运行起来
+       不同的方式导致 start 值是不一样的，根据 start 值找到对应的 DFA 然后去初始化 stack
+
+       注意：ps->p_tree作为父节点被传递到初始化push的第一个元素，整个p_stack的DFA、state的信息都是一颗树
+       */
        (void) s_push(&ps->p_stack, finddfa(g, start), ps->p_tree);
        return ps;
 }
@@ -229,9 +237,24 @@ addtoken(ps, type, str, lineno)
 {
        register int ilabel;
 
+       /*
+       以 a = 1 + 1 只有一条语句的为例，最后生成的 p_tree 属性图是如下所示：
+
+       file_input => stmt => simple_stmt => expr_stmt => exprlist => expr => term => factor => atom => NAME(a)
+                                                      => EQUAL(=)
+                                                      => exprlist => expr => term => factor => atom => NAME(a)
+                                                                          => PLUS(+)
+                                                                          => term => factor => atom => NAME(a)
+       */
+       /*
+       注意：这里push有两个操作，一个是针对解释语法树DFA、state的 p_stack 结构的push对应是 s_push
+            另外一个是对语法树node的 p_tree 结构的push对应的是push，注意push里面会同时调用s_push
+       */
+
        D(printf("Token %s/'%s' ... ", tok_name[type], str));
 
        /* Find out which label this token is */
+       //这里根据type和str两个token属性，去匹配对应graminit.c的labels然后得出labels的下标ilabel
        ilabel = classify(ps->p_grammar, type, str);
        if (ilabel < 0)
                return E_SYNTAX;
@@ -239,49 +262,77 @@ addtoken(ps, type, str, lineno)
        /* Loop until the token is shifted or an error occurred */
        for (;;) {
                /* Fetch the current dfa and state */
+               //获取当前stack里面的 DFA和state信息，在初始化parser的时候stack就有了起始的DFA、state元素了
+               //以 file_input 为例，在newparser初始化的时候，已经将 file_input 的DFA和state push入stack了
+               //所以第一次循环的时候，取出来的是 file_input 的 DFA和state
+               //那么在第二次循环的时候，再取一次DFA、state就不再是 file_input 的了，是file_input的下一个状态 stmt
+               //那么这个 stmt 的DFA、state信息是什么是push stack的呢，就看下面代码循环的 push(xx,xx,xx,xx,xx)部分
                register dfa *d = ps->p_stack.s_top->s_dfa;
                register state *s = &d->d_state[ps->p_stack.s_top->s_state];
 
-               D(printf(" DFA '%s', state %d:",
-                       d->d_name, ps->p_stack.s_top->s_state));
+               //当前在处理的 DFA、state
+               //那对应是 push 还是 pop 操作，具体看下面的逻辑
+               //正常情况下都是从外到内先push一轮到stack到终结符
+               //然后再从底层内层去适配慢慢pop完就完成整个解释
+               //这里打印的是当前p_stack第一个元素，这条语句还没结束，不是一个完整的日志输出，没有\n换行，后面
+               //具体是 Push、shift、Pop、ACDEPT 加上才是真正完整一条
+               D(printf(" DFA '%s', state %d:", d->d_name, ps->p_stack.s_top->s_state));
 
                /* Check accelerator */
+               // ilabel 在这个 state 的 [lower,upper] 加速的区间内 ？
                if (s->s_lower <= ilabel && ilabel < s->s_upper) {
+                       //这里的 x 是当前 state 的下一个状态信息，这个在 acceler.c fixstate函数已经有描述
+                       //把x信息（也就是下一个状态）提出出来，低7位，高1位是type类型信息（fixstate函数已经有描述）
                        register int x = s->s_accel[ilabel - s->s_lower];
                        if (x != -1) {
                                if (x & (1<<7)) {
                                        /* Push non-terminal */
-                                       int nt = (x >> 8) + NT_OFFSET;
-                                       int arrow = x & ((1<<7)-1);
+                                       //如果是非终结符，那么就继续找下一个状态并push stack
+                                       //
+                                       int nt = (x >> 8) + NT_OFFSET;  // 类型 type
+                                       int arrow = x & ((1<<7)-1);     // 下一个状态指向
+                                       // 根据 nt、arrow 信息查找对应的 DFA，然后把它 push 到 stack
+                                       // 这样下一次循环提取的就是下一个状态的 DFA、state信息了，如此类推一直到语法状态结束为止
                                        dfa *d1 = finddfa(ps->p_grammar, nt);
+                                       //
+                                       //push是增加 p_tree node节点的同时，又 push p_stack 下一个状态，一共有2个职能
+                                       //
                                        if (push(&ps->p_stack, nt, d1,
                                                arrow, lineno) < 0) {
                                                D(printf(" MemError: push.\n"));
                                                return E_NOMEM;
                                        }
+                                       //这个push日志对应会显示push了什么dfa、state入stack，看上一个D(printf)日志
                                        D(printf(" Push ...\n"));
+                                       //状态走向没完继续 continue
                                        continue;
                                }
 
                                /* Shift the token */
+                               // shift 增加的是父节点下面的子节点
+                               // 而这个父节点信息就是 shift 日志里面有显示
                                if (shift(&ps->p_stack, type, str,
                                                x, lineno) < 0) {
                                        D(printf(" MemError: shift.\n"));
                                        return E_NOMEM;
                                }
+                               //但遇到了终结符之后，就开始一个个pop来适配对应的DFA、state，一直到处理完为止
                                D(printf(" Shift.\n"));
                                /* Pop while we are in an accept-only state */
-                               while (s = &d->d_state
-                                               [ps->p_stack.s_top->s_state],
+                               while ( s = &d->d_state[ps->p_stack.s_top->s_state], 
                                        s->s_accept && s->s_narcs == 1) {
                                        D(printf("  Direct pop.\n"));
                                        s_pop(&ps->p_stack);
                                        if (s_empty(&ps->p_stack)) {
                                                D(printf("  ACCEPT.\n"));
+                                               /* #define E_DONE 16 Parsing complete */
+                                               // 全部分析完成就输出 ACCEPT 全部代码分析完成而不是某个代码
                                                return E_DONE;
                                        }
                                        d = ps->p_stack.s_top->s_dfa;
                                }
+                               // addtoken 这个 token 分析完毕
+                               D(printf("E_OK\n"));
                                return E_OK;
                        }
                }
