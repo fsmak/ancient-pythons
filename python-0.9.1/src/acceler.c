@@ -144,7 +144,7 @@ fixstate(g, d, s)
                                //
                                if (testbit(d1->d_first, ibit)) {
                                        //这里针对匹配的才输出labels下标方便查看
-                                       printf("lables_idx=[%d][%d]\n", ibit-1, ibit);
+                                       //printf("lables_idx=[%d][%d]\n", ibit-1, ibit);
                                        if (accel[ibit] != -1) {
                                                printf("XXX ambiguity!\n"); // ambiguity是歧义的意思
                                        }
