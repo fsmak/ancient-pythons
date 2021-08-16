@@ -116,6 +116,7 @@ parsetok(tok, g, start, n_ret)
        parser_state *ps;
        int ret;
 
+       //初始化 parser 数据结构，这里主要是跟 grammar 相关
        if ((ps = newparser(g, start)) == NULL) {
                fprintf(stderr, "no mem for new parser\n");
                return E_NOMEM;
@@ -127,6 +128,7 @@ parsetok(tok, g, start, n_ret)
                int len;
                char *str;
 
+               //获取一个 token， type是对应token类型
                type = tok_get(tok, &a, &b);
                if (type == ERRORTOKEN) {
                        ret = tok->done;
@@ -141,14 +143,19 @@ parsetok(tok, g, start, n_ret)
                }
                strncpy(str, a, len);
                str[len] = '\0';
+               //去分析这个token，具体看addtoken里面的逻辑
                ret = addtoken(ps, (int)type, str, tok->lineno);
                if (ret != E_OK) {
+                       // 这里不等于 E_OK 有两种情况
+                       printtree(ps);
                        if (ret == E_DONE) {
+                               // 正常全部解释完毕， ps->p_tree 里面已经保存好生成的语法node树了
                                *n_ret = ps->p_tree;
                                ps->p_tree = NULL;
                        }
-                       else if (tok->lineno <= 1 && tok->done == E_EOF)
+                       else if (tok->lineno <= 1 && tok->done == E_EOF) {
                                ret = E_EOF;
+                       }
                        break;
                }
        }
