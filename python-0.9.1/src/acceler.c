@@ -116,12 +116,21 @@ fixstate(g, d, s)
                        printf("XXX too many states!\n");
                        continue;
                }
+               /*
+               对于不同DFA的状态流转，状态节点有3种情况（类型）分别对应下面3个if-else-elseif分支
+               1.是非终结符还需要继续展开的 ISNONTERMINAL
+               2.是结束符EMPTY，accept
+               3.是普通独立状态节点，不需要展开的（比如 关键字 之类等）可以直接流转到下一个状态节点的
+               */
+
                // 这个是判断是否为非终结符，所有非终结符都是 >= 256 的，
                // 参考 gramminit.h #define single_input 256 开始
                // #define NT_OFFSET              256
                // #define ISNONTERMINAL(x)       ((x) >= NT_OFFSET) 
                if (ISNONTERMINAL(type)) {
                        // 如果是非终结符，那么需要找到它对应的 DFA 状态机
+                       // 对于非终结符 >= 256 参考 gramminit.h 宏定义，这类型type都是需要深入展开的
+                       // 所以这里的逻辑比较复杂，记录 accel 的 value 信息也比较多
                        dfa *d1 = finddfa(g, type);
                        int ibit;
                        if (type - NT_OFFSET >= (1 << 7)) {
@@ -134,33 +143,44 @@ fixstate(g, d, s)
                                // #define BIT2BYTE(ibit) ((ibit) / BITSPERBYTE) 用当前ibit计算出是第几个字节，所以用 ibit / 8
                                // #define BIT2SHIFT(ibit)        ((ibit) % BITSPERBYTE) 计算当前ibit取整字节后的位数，为先mask辅助
                                // #define BIT2MASK(ibit) (1 << BIT2SHIFT(ibit)) 计算当前ibit的掩码mask，简单来讲就是二进制1每循环一次往左移动1位 <<，所以依次是 1 2 4 8 16 32 64
+                               // #define testbit(ss, ibit) (((ss)[BIT2BYTE(ibit)] & BIT2MASK(ibit)) != 0)
                                // 需要注意的是 d_first 初始化的值是八进制
-                               //printf("[%d] %d %d %d 0x%X(%u)(%o)\n", ibit, BITSPERBYTE, BIT2BYTE(ibit), BIT2MASK(ibit), 
-                               //d1->d_first[BIT2BYTE(ibit)], d1->d_first[BIT2BYTE(ibit)]);
+                               printf("[%d] %d %d 0x%X(%u)(\\0%o)\n", ibit, BIT2BYTE(ibit), BIT2MASK(ibit), 
+                               d1->d_first[BIT2BYTE(ibit)], d1->d_first[BIT2BYTE(ibit)], d1->d_first[BIT2BYTE(ibit)]);
                                //
                                // 看了grammar.h 数据结构描述后，这里的逻辑也就比较清晰了，通过分析每一个子状态state里面的 d_first 开始状态数据
                                // 然后把这个这些开始状态的信息及下一个状态的指向信息（arrow）记录到一个局部数组accel里面，到了函数结束部分整理
                                // 后回写进这个子状态state的 Optional accelerators 成员里面
                                //
                                if (testbit(d1->d_first, ibit)) {
-                                       //这里针对匹配的才输出labels下标方便查看
-                                       //printf("lables_idx=[%d][%d]\n", ibit-1, ibit);
                                        if (accel[ibit] != -1) {
                                                printf("XXX ambiguity!\n"); // ambiguity是歧义的意思
                                        }
-                                       // 这个加速是什么逻辑呢
-                                       // 个人理解就是记录所有lables所指向下一个状态的信息，其中
-                                       // 低7位记录的是 a_arrow 下一个状态的信息
-                                       // 高1位记录的是 type 信息，这个type信息是先减去 NT_OFFSET 的
+                                       // 加速信息由key=>value组成
+                                       // key 是ibit对应的是labels 91个元素下标
+                                       // value 是对应加速信息，由2个byte字节组成
+                                       //   高8位字节记录的是type信息，这里的type是要先减去 NT_OFFSET的
+                                       //   低8位字节记录的是下一个状态信息保存在低7位，然后第一位标记为1（代表非终结符）
                                        accel[ibit] = a->a_arrow | (1 << 7) |
                                                ((type - NT_OFFSET) << 8);
+
+                                       //这里针对匹配的才输出labels下标方便查看
+                                       printf("lables_idx=[%d][%d] arrow=%d type=%d(%d) => value[%d][%X]\n", 
+                                       ibit-1, ibit, a->a_arrow, type, type - NT_OFFSET, accel[ibit], accel[ibit]);
+
                                }
                        }
                }
                else if (lbl == EMPTY) {
+                       // 标记结束状态，个人理解就是一个DFA状态流转正常的情况下，会有一个正常的结束
+                       // 而这个 labels下标=0 EMPTY 则是代表整个状态流转的结束标记
                        s->s_accept = 1;
                }
                else if (lbl >= 0 && lbl < nl) {
+                       // 这个 else if 逻辑是处理 type < 256 的 token.h 
+                       // 参考 graminit.c 关于 static label labels[91] 的注释
+                       // 这里理解就是 lbl 元素是独立的，不用像非终结符那样需要再慢慢深入展开分析
+                       // 所以这里就直接保存一下个状态指向即可，不需额外记录其他信息了
                        accel[lbl] = a->a_arrow;
                }
        }
@@ -193,5 +213,8 @@ fixstate(g, d, s)
        DEL(accel);
        /*
          这个加速逻辑需要结合 parser.c 里面的 addtoken 函数使用才能看懂
+         个人理解，就是把状态节点对应迁移的状态节点流转信息用位图的方式记录在该状态的数据结构
+         _state 的 Optional accelerators 成员里，当 addtoken分析语法的时候，用语法树的方式
+         不断 push、pop 来匹配语法
        */
 }
