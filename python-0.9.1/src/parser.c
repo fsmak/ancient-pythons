@@ -207,7 +207,7 @@ classify(g, type, str)
                        if (l->lb_type == NAME && l->lb_str != NULL &&
                                        l->lb_str[0] == s[0] &&
                                        strcmp(l->lb_str, s) == 0) {
-                               D(printf("It's a keyword\n"));
+                               D(printf("It's a keyword [label=%d] \n", n - i));
                                return n - i;
                        }
                }
@@ -218,7 +218,7 @@ classify(g, type, str)
                register int i;
                for (i = n; i > 0; i--, l++) {
                        if (l->lb_type == type && l->lb_str == NULL) {
-                               D(printf("It's a token we know\n"));
+                               D(printf("It's a token we know [label=%d] \n", n - i));
                                return n - i;
                        }
                }
@@ -238,6 +238,9 @@ addtoken(ps, type, str, lineno)
        register int ilabel;
 
        /*
+       个人觉得语法树的生成有点类似 深度优先 算法，每一条分支去匹配，不行再回退再尝试另外一条分支，满足了就结束
+       我觉得这里可以用递归的，不过它没有，用了堆栈的方式（堆栈消除递归），后面的解释运行反而是用了递归的算法，具体看 ceval.c
+
        以 a = 1 + 1 只有一条语句的为例，最后生成的 p_tree 属性图是如下所示：
 
        file_input => stmt => simple_stmt => expr_stmt => exprlist => expr => term => factor => atom => NAME(a)
@@ -279,7 +282,8 @@ addtoken(ps, type, str, lineno)
                D(printf(" DFA '%s', state %d:", d->d_name, ps->p_stack.s_top->s_state));
 
                /* Check accelerator */
-               // ilabel 在这个 state 的 [lower,upper] 加速的区间内 ？
+               // ilabel 在这个 state 的 [lower,upper] 有效状态转换区间
+               // 个人理解就是不在这个区间内的，都是不正常的状态转换
                if (s->s_lower <= ilabel && ilabel < s->s_upper) {
                        //这里的 x 是当前 state 的下一个状态信息，这个在 acceler.c fixstate函数已经有描述
                        //把x信息（也就是下一个状态）提出出来，低7位，高1位是type类型信息（fixstate函数已经有描述）
@@ -337,10 +341,15 @@ addtoken(ps, type, str, lineno)
                        }
                }
 
+               // pop一个dfa然后尝试下一个
                if (s->s_accept) {
                        /* Pop this dfa and try again */
+                       // 根据 acceler.c accpet就是该状态流转到达结束了，既然是到达结束了
+                       // 那么就有2种情况，1种是匹配符合语法树；1种是不匹配那就是语法有问题了
                        s_pop(&ps->p_stack);
                        D(printf(" Pop ...\n"));
+                       //如果发现pop完之后，p_stack为空了，那就代表没有正常分析完一个状态图，
+                       //应该是语法有错误了直接返回
                        if (s_empty(&ps->p_stack)) {
                                D(printf(" Error: bottom of stack.\n"));
                                return E_SYNTAX;
