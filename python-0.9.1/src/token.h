@@ -28,7 +28,7 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #define NAME           1
 #define NUMBER         2
 #define STRING         3
-#define NEWLINE                4
+#define NEWLINE        4
 #define INDENT         5
 #define DEDENT         6
 #define LPAR           7
@@ -45,10 +45,10 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #define VBAR           18
 #define AMPER          19
 #define LESS           20
-#define GREATER                21
+#define GREATER        21
 #define EQUAL          22
 #define DOT            23
-#define PERCENT                24
+#define PERCENT        24
 #define BACKQUOTE      25
 #define LBRACE         26
 #define RBRACE         27
